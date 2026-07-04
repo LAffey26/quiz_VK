@@ -43,7 +43,10 @@ const authenticateToken = (req, res, next) => {
   }
 };
 
+// ==========================================
 // HTTP РОУТЫ СЕРВЕРА
+// ==========================================
+
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", message: "Бэкенд работает!" });
 });
@@ -96,12 +99,17 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.post("/api/quizzes", authenticateToken, async (req, res) => {
-  const { title, description } = req.body;
+  const { title, description, category } = req.body;
   if (!title)
     return res.status(400).json({ error: "Название квиза обязательно" });
   try {
     const newQuiz = await prisma.quiz.create({
-      data: { title, description, authorId: req.userId },
+      data: {
+        title,
+        description,
+        category: category || "Общее",
+        authorId: req.userId,
+      },
     });
     res.status(201).json({ message: "Квиз создан!", quiz: newQuiz });
   } catch (e) {
@@ -150,13 +158,15 @@ app.post(
   authenticateToken,
   async (req, res) => {
     const { quizId } = req.params;
-    const { text, timeLimit, answers } = req.body;
+    const { text, timeLimit, answers, imageUrl, isMultipleChoice } = req.body;
     try {
       const newQuestion = await prisma.question.create({
         data: {
           text,
           timeLimit: Number(timeLimit),
           quizId: Number(quizId),
+          imageUrl: imageUrl || null,
+          isMultipleChoice: isMultipleChoice || false,
           answers: {
             create: answers.map((ans) => ({
               text: ans.text,
@@ -178,7 +188,7 @@ app.put(
   authenticateToken,
   async (req, res) => {
     const { questionId } = req.params;
-    const { text, timeLimit, answers } = req.body;
+    const { text, timeLimit, answers, imageUrl, isMultipleChoice } = req.body;
     try {
       await prisma.$transaction([
         prisma.answer.deleteMany({ where: { questionId: Number(questionId) } }),
@@ -187,6 +197,8 @@ app.put(
           data: {
             text,
             timeLimit: Number(timeLimit),
+            imageUrl: imageUrl || null,
+            isMultipleChoice: isMultipleChoice || false,
             answers: {
               create: answers.map((ans) => ({
                 text: ans.text,
@@ -212,7 +224,7 @@ app.delete(
       await prisma.question.delete({ where: { id: Number(questionId) } });
       res.json({ message: "Удалено" });
     } catch (e) {
-      res.status(500).json({ error: "Ошибка" });
+      res.status(500).json({ error: "Ошибка при удалении" });
     }
   },
 );
@@ -277,10 +289,30 @@ app.get("/api/hub/top-winners", authenticateToken, async (req, res) => {
   }
 });
 
+app.get("/api/hub/popular-quizzes", authenticateToken, async (req, res) => {
+  try {
+    const quizzes = await prisma.quiz.findMany({
+      where: { questions: { some: {} } },
+      include: {
+        author: { select: { username: true } },
+        _count: { select: { questions: true } },
+      },
+      orderBy: { playCount: "desc" },
+      take: 10,
+    });
+    res.json(quizzes);
+  } catch (e) {
+    res.status(500).json({ error: "Ошибка" });
+  }
+});
+
+// ==========================================
+// SOCKET.IO LOGIC (С ПОДДЕРЖКОЙ МНОЖЕСТВЕННОГО ВЫБОРА)
+// ==========================================
+
 io.on("connection", (socket) => {
   console.log(`Подключился: ${socket.id}`);
 
-  // Ведущий запускает игру (создает комнату)
   socket.on("host_create_room", async ({ quizId }) => {
     let pin;
     do {
@@ -306,7 +338,7 @@ io.on("connection", (socket) => {
         currentQuestionIndex: 0,
         players: [],
         answersReceived: 0,
-        playerAnswers: {}, // Теперь ключами будут имена игроков (username), а не socketId!
+        playerAnswers: {},
       };
 
       socket.join(pin);
@@ -316,7 +348,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Игрок заходит в лобби (ОБНОВЛЕНО: Поддерживает вход во время игры и перезаход без потери очков!)
   socket.on("player_join_room", ({ pin, username }) => {
     const room = activeRooms[pin];
     if (!room) {
@@ -328,20 +359,14 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Проверяем, есть ли уже игрок с таким именем в комнате (Решаем проблему вылета)
     const existingPlayer = room.players.find((p) => p.username === username);
 
     if (existingPlayer) {
-      // ПЕРЕПОДКЛЮЧЕНИЕ: Игрок просто перезагрузил страницу или переподключился!
-      existingPlayer.socketId = socket.id; // Перезаписываем сокет на новый
+      existingPlayer.socketId = socket.id;
       socket.join(pin);
       socket.emit("player_joined_success", { pin, username });
-
-      // Оповещаем ведущего об обновлении списка сокетов
       io.to(pin).emit("room_players_update", room.players);
-      console.log(`Игрок ${username} успешно переподключился в комнату ${pin}`);
 
-      // Если игра уже идет, СРАЗУ отправляем переподключившемуся игроку текущий активный вопрос
       if (room.status === "PLAYING") {
         const question = room.questions[room.currentQuestionIndex];
         const safeAnswersForPlayers = question.answers.map((ans) => ({
@@ -353,6 +378,8 @@ io.on("connection", (socket) => {
           questionText: question.text,
           timeLimit: question.timeLimit,
           answers: safeAnswersForPlayers,
+          imageUrl: question.imageUrl,
+          isMultipleChoice: question.isMultipleChoice,
           currentQuestionIndex: room.currentQuestionIndex,
           totalQuestions: room.questions.length,
           isHostView: false,
@@ -368,11 +395,6 @@ io.on("connection", (socket) => {
     socket.emit("player_joined_success", { pin, username });
     io.to(pin).emit("room_players_update", room.players);
 
-    console.log(
-      `Новый игрок ${username} зашел в комнату ${pin} ${room.status === "PLAYING" ? "во время матча" : ""}`,
-    );
-
-    // Если игра уже идет, сразу отправляем новому игроку текущий вопрос
     if (room.status === "PLAYING") {
       const question = room.questions[room.currentQuestionIndex];
       const safeAnswersForPlayers = question.answers.map((ans) => ({
@@ -384,6 +406,8 @@ io.on("connection", (socket) => {
         questionText: question.text,
         timeLimit: question.timeLimit,
         answers: safeAnswersForPlayers,
+        imageUrl: question.imageUrl,
+        isMultipleChoice: question.isMultipleChoice,
         currentQuestionIndex: room.currentQuestionIndex,
         totalQuestions: room.questions.length,
         isHostView: false,
@@ -416,25 +440,24 @@ io.on("connection", (socket) => {
 
     room.answersReceived = 0;
     room.playerAnswers = {};
-    const question = room.questions[room.currentQuestionIndex];
-    const correctAnswer = question.answers.find((ans) => ans.isCorrect);
 
+    const question = room.questions[room.currentQuestionIndex];
     const safeAnswersForPlayers = question.answers.map((ans) => ({
       id: ans.id,
       text: ans.text,
     }));
 
-    // Игрокам
     socket.to(pin).emit("next_question", {
       questionText: question.text,
       timeLimit: question.timeLimit,
       answers: safeAnswersForPlayers,
+      imageUrl: question.imageUrl,
+      isMultipleChoice: question.isMultipleChoice,
       currentQuestionIndex: room.currentQuestionIndex,
       totalQuestions: room.questions.length,
       isHostView: false,
     });
 
-    // Ведущему
     io.to(room.hostSocketId).emit("next_question", {
       questionText: question.text,
       timeLimit: question.timeLimit,
@@ -443,30 +466,32 @@ io.on("connection", (socket) => {
         text: ans.text,
         isCorrect: ans.isCorrect,
       })),
+      imageUrl: question.imageUrl,
+      isMultipleChoice: question.isMultipleChoice,
       currentQuestionIndex: room.currentQuestionIndex,
       totalQuestions: room.questions.length,
-      correctAnswerId: correctAnswer ? correctAnswer.id : null,
       isHostView: true,
     });
   }
 
-  socket.on("player_submit_answer", ({ pin, answerId }) => {
+  socket.on("player_submit_answer", ({ pin, answerIds }) => {
     const room = activeRooms[pin];
     if (!room || room.status !== "PLAYING") return;
 
     const player = room.players.find((p) => p.socketId === socket.id);
     if (!player) return;
-
     if (room.playerAnswers[player.username]) return;
 
     const question = room.questions[room.currentQuestionIndex];
-    const selectedAnswer = question.answers.find(
-      (ans) => ans.id === Number(answerId),
-    );
-    const isCorrect = selectedAnswer ? selectedAnswer.isCorrect : false;
+    const correctAnswers = question.answers
+      .filter((ans) => ans.isCorrect)
+      .map((ans) => ans.id);
+    const isCorrect =
+      answerIds.length === correctAnswers.length &&
+      answerIds.every((id) => correctAnswers.includes(Number(id)));
 
     if (isCorrect) {
-      player.score += 1; // 1 звезда
+      player.score += 1;
     }
 
     room.playerAnswers[player.username] = { isCorrect };
@@ -486,16 +511,25 @@ io.on("connection", (socket) => {
     revealQuestionResults(pin);
   });
 
+  // Функция вскрытия результатов (ОБНОВЛЕНА: Находит и шлет массив ВСЕХ правильных ID!)
   function revealQuestionResults(pin) {
     const room = activeRooms[pin];
     if (!room) return;
 
     const question = room.questions[room.currentQuestionIndex];
-    const correctAnswer = question.answers.find((ans) => ans.isCorrect);
+
+    // Находим ВСЕ правильные ID ответов для этого вопроса
+    const correctAnswerIds = question.answers
+      .filter((ans) => ans.isCorrect)
+      .map((ans) => ans.id);
+    const correctAnswerText = question.answers
+      .filter((ans) => ans.isCorrect)
+      .map((ans) => ans.text)
+      .join(", ");
 
     io.to(pin).emit("question_results", {
-      correctAnswerId: correctAnswer ? correctAnswer.id : null,
-      correctAnswerText: correctAnswer ? correctAnswer.text : "",
+      correctAnswerIds, // <--- Шлем массив правильных ID!
+      correctAnswerText,
       playerAnswers: room.playerAnswers,
       players: room.players,
     });
@@ -511,7 +545,6 @@ io.on("connection", (socket) => {
       sendQuestion(pin);
     } else {
       room.status = "LEADERBOARD";
-
       const sortedLeaderboard = [...room.players].sort(
         (a, b) => b.score - a.score,
       );
@@ -521,7 +554,6 @@ io.on("connection", (socket) => {
         const quiz = await prisma.quiz.findUnique({
           where: { id: Number(room.quizId) },
         });
-
         const resultsJsonString = JSON.stringify(
           sortedLeaderboard.map((p) => ({
             username: p.username,
@@ -542,43 +574,21 @@ io.on("connection", (socket) => {
           const p = sortedLeaderboard[i];
           const isWinner = i === 0;
 
-          try {
-            // 1. Ищем игрока в БД по имени
-            const dbUser = await prisma.user.findUnique({
-              where: { username: p.username },
+          const dbUser = await prisma.user.findUnique({
+            where: { username: p.username },
+          });
+          if (dbUser) {
+            const updateData = { starsCount: dbUser.starsCount + p.score };
+            if (isWinner) updateData.winsCount = dbUser.winsCount + 1;
+
+            await prisma.user.update({
+              where: { id: dbUser.id },
+              data: updateData,
             });
-
-            if (dbUser) {
-              const updateData = {
-                starsCount: dbUser.starsCount + p.score,
-              };
-
-              if (isWinner) {
-                updateData.winsCount = dbUser.winsCount + 1;
-              }
-
-              await prisma.user.update({
-                where: { id: dbUser.id },
-                data: updateData,
-              });
-
-              console.log(
-                `[УСПЕХ] Статистика ${p.username} обновлена: +${p.score} звезд. Победитель: ${isWinner}`,
-              );
-            } else {
-              console.warn(
-                `[ПРЕДУПРЕЖДЕНИЕ] Игрок ${p.username} не найден в БД (возможно, гость).`,
-              );
-            }
-          } catch (userUpdateError) {
-            console.error(
-              `[ОШИБКА] Не удалось обновить статистику игрока ${p.username}:`,
-              userUpdateError,
-            );
           }
         }
       } catch (err) {
-        console.error("Ошибка сохранения итогов игры:", err);
+        console.error(err);
       }
 
       io.to(pin).emit("game_over", { leaderboard: sortedLeaderboard });
@@ -588,20 +598,13 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     for (const pin in activeRooms) {
       const room = activeRooms[pin];
-
-      // Если вышел ведущий - закрываем
       if (room.hostSocketId === socket.id) {
         io.to(pin).emit("error", { message: "Ведущий вышел. Игра закрыта." });
         delete activeRooms[pin];
         break;
       }
-
-      // Если вышел игрок - мы НЕ удаляем его из списка players сразу (чтобы он мог перезайти со своим счетом)!
       const player = room.players.find((p) => p.socketId === socket.id);
       if (player) {
-        console.log(
-          `Игрок ${player.username} временно отвалился от комнаты ${pin}`,
-        );
         break;
       }
     }
