@@ -8,7 +8,7 @@ function App() {
   const [password, setPassword] = useState("");
   const [user, setUser] = useState(null);
 
-  // Управление экранами: 'hub', 'profile', 'create-quiz', 'manage-questions', 'host-lobby', 'player-lobby', 'game-screen'
+  // Управление экранами
   const [currentView, setCurrentView] = useState("hub");
 
   // Сокеты
@@ -20,17 +20,18 @@ function App() {
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [timer, setTimer] = useState(0);
   const [hasAnswered, setHasAnswered] = useState(false);
-  const [selectedAnswerId, setSelectedAnswerId] = useState(null);
+  const [selectedAnswerIds, setSelectedAnswerIds] = useState([]);
   const [answersCount, setAnswersCount] = useState({ received: 0, total: 0 });
   const [questionResults, setQuestionResults] = useState(null);
   const [finalLeaderboard, setFinalLeaderboard] = useState(null);
   const [gameDate, setGameDate] = useState(null);
   const timerIntervalRef = useRef(null);
 
-  // Данные хаба (История игр и ТОП победителей)
+  // Данные хаба
   const [gameHistory, setGameHistory] = useState([]);
   const [topWinners, setTopWinners] = useState([]);
   const [playSearchId, setPlaySearchId] = useState("");
+  const [popularQuizzes, setPopularQuizzes] = useState([]); // Популярные квизы
 
   // Мои квизы
   const [quizzes, setQuizzes] = useState([]);
@@ -38,11 +39,16 @@ function App() {
   const [questions, setQuestions] = useState([]);
   const [editingQuestionId, setEditingQuestionId] = useState(null);
 
-  // Формы квиза/вопроса
+  // Формы квиза
   const [newQuizTitle, setNewQuizTitle] = useState("");
   const [newQuizDesc, setNewQuizDesc] = useState("");
+  const [newQuizCategory, setNewQuizCategory] = useState("Общее");
+
+  // Формы нового/редактируемого вопроса
   const [questionText, setQuestionText] = useState("");
   const [timeLimit, setTimeLimit] = useState(30);
+  const [questionImageUrl, setQuestionImageUrl] = useState("");
+  const [isMultipleChoice, setIsMultipleChoice] = useState(false);
   const [answersList, setAnswersList] = useState([
     { text: "", isCorrect: true },
     { text: "", isCorrect: false },
@@ -80,7 +86,7 @@ function App() {
       setActiveQuestion(questionData);
       setTimer(questionData.timeLimit);
       setHasAnswered(false);
-      setSelectedAnswerId(null);
+      setSelectedAnswerIds([]);
       setQuestionResults(null);
       setAnswersCount({ received: 0, total: gamePlayers.length });
       setCurrentView("game-screen");
@@ -153,16 +159,20 @@ function App() {
   const fetchHubData = async () => {
     const token = localStorage.getItem("token");
     try {
-      const [histRes, topRes] = await Promise.all([
+      const [histRes, topRes, popRes] = await Promise.all([
         fetch("http://localhost:3000/api/hub/game-history", {
           headers: { Authorization: `Bearer ${token}` },
         }),
         fetch("http://localhost:3000/api/hub/top-winners", {
           headers: { Authorization: `Bearer ${token}` },
         }),
+        fetch("http://localhost:3000/api/hub/popular-quizzes", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
       ]);
       if (histRes.ok) setGameHistory(await histRes.json());
       if (topRes.ok) setTopWinners(await topRes.json());
+      if (popRes.ok) setPopularQuizzes(await popRes.json());
     } catch (err) {
       console.error(err);
     }
@@ -180,14 +190,14 @@ function App() {
     }
   };
 
-  // ----- СОКЕТНЫЕ МЕТОДЫ ИГРЫ -----
+  // ----- СОКЕТНЫЕ МЕТОДЫ -----
   const handleHostGame = (quizId) => {
     const quiz = quizzes.find((q) => q.id === quizId);
     setSelectedQuiz(quiz);
     socketRef.current.emit("host_create_room", { quizId });
   };
 
-  const handleSearchPlayQuiz = (e) => {
+  const handleSearchPlayQuiz = async (e) => {
     e.preventDefault();
     if (!playSearchId) return;
     socketRef.current.emit("player_join_room", {
@@ -207,11 +217,31 @@ function App() {
     socketRef.current.emit("host_start_game", { pin: roomPin });
   };
 
-  const handleSendAnswer = (answerId) => {
-    if (hasAnswered) return;
+  const handleSelectAnswerId = (answerId) => {
+    if (hasAnswered || !!questionResults) return;
+    if (activeQuestion.isMultipleChoice) {
+      if (selectedAnswerIds.includes(answerId)) {
+        setSelectedAnswerIds(selectedAnswerIds.filter((id) => id !== answerId));
+      } else {
+        setSelectedAnswerIds([...selectedAnswerIds, answerId]);
+      }
+    } else {
+      setHasAnswered(true);
+      setSelectedAnswerIds([answerId]);
+      socketRef.current.emit("player_submit_answer", {
+        pin: roomPin,
+        answerIds: [answerId],
+      });
+    }
+  };
+
+  const handleSendMultipleAnswers = () => {
+    if (selectedAnswerIds.length === 0 || hasAnswered) return;
     setHasAnswered(true);
-    setSelectedAnswerId(answerId);
-    socketRef.current.emit("player_submit_answer", { pin: roomPin, answerId });
+    socketRef.current.emit("player_submit_answer", {
+      pin: roomPin,
+      answerIds: selectedAnswerIds,
+    });
   };
 
   const handleRevealResults = () => {
@@ -232,10 +262,8 @@ function App() {
     setCurrentView("hub");
   };
 
-  // Открыть историю матча на полный экран
   const handleShowHistoryLeaderboard = (game) => {
     setSelectedQuiz({ title: game.quizTitle });
-
     const formattedDate = new Date(game.playedAt).toLocaleDateString("ru-RU", {
       day: "numeric",
       month: "long",
@@ -244,7 +272,6 @@ function App() {
       minute: "2-digit",
     });
     setGameDate(formattedDate);
-
     const parsedLeaderboard = JSON.parse(game.resultsJson || "[]");
     setFinalLeaderboard(parsedLeaderboard);
   };
@@ -312,12 +339,17 @@ function App() {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ title: newQuizTitle, description: newQuizDesc }),
+      body: JSON.stringify({
+        title: newQuizTitle,
+        description: newQuizDesc,
+        category: newQuizCategory,
+      }),
     });
     setLoading(false);
     if (res.ok) {
       setNewQuizTitle("");
       setNewQuizDesc("");
+      setNewQuizCategory("Общее");
       setCurrentView("profile");
     }
   };
@@ -331,6 +363,7 @@ function App() {
     });
     if (res.ok) fetchMyQuizzes();
   };
+
   const handleSaveQuestion = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -348,6 +381,8 @@ function App() {
         text: questionText,
         timeLimit,
         answers: answersList,
+        imageUrl: questionImageUrl,
+        isMultipleChoice,
       }),
     });
     setLoading(false);
@@ -356,10 +391,13 @@ function App() {
       fetchQuestions(selectedQuiz.id);
     }
   };
+
   const handleStartEditQuestion = (q) => {
     setEditingQuestionId(q.id);
     setQuestionText(q.text);
     setTimeLimit(q.timeLimit);
+    setQuestionImageUrl(q.imageUrl || "");
+    setIsMultipleChoice(q.isMultipleChoice || false);
     setAnswersList(
       q.answers.map((a) => ({ text: a.text, isCorrect: a.isCorrect })),
     );
@@ -379,6 +417,8 @@ function App() {
   const handleResetQuestionForm = () => {
     setQuestionText("");
     setTimeLimit(30);
+    setQuestionImageUrl("");
+    setIsMultipleChoice(false);
     setAnswersList([
       { text: "", isCorrect: true },
       { text: "", isCorrect: false },
@@ -390,11 +430,19 @@ function App() {
     arr[i].text = v;
     setAnswersList(arr);
   };
-  const handleSetCorrectAnswer = (i) => {
-    setAnswersList(
-      answersList.map((a, idx) => ({ ...a, isCorrect: idx === i })),
-    );
+
+  const handleSetCorrectAnswer = (index) => {
+    const updated = [...answersList];
+    if (isMultipleChoice) {
+      updated[index].isCorrect = !updated[index].isCorrect;
+    } else {
+      updated.forEach((ans, idx) => {
+        ans.isCorrect = idx === index;
+      });
+    }
+    setAnswersList(updated);
   };
+
   const handleAddAnswerField = () =>
     setAnswersList([...answersList, { text: "", isCorrect: false }]);
   const handleRemoveAnswerField = (i) => {
@@ -412,7 +460,6 @@ function App() {
   if (user) {
     return (
       <div className="app-layout">
-        {/* СКРЫВАЕМ ШАПКУ, ЕСЛИ ИДЕТ ИГРА ИЛИ НА ЭКРАНЕ ФИНАЛЬНЫЙ ЛИДЕРБОРД */}
         {!roomPin && !finalLeaderboard && (
           <header className="main-header">
             <div className="header-left">
@@ -427,7 +474,6 @@ function App() {
               </button>
             </div>
             <div className="header-right">
-              {/* УБРАЛИ ЛИШНИЙ ИНПУТ ПОИСКА ПИН-КОДА — ШАПКА ТЕПЕРЬ СВОБОДНА! */}
               <span className="user-badge">{user.username}</span>
               <button onClick={handleLogout} className="logout-header-btn">
                 Выйти
@@ -538,7 +584,6 @@ function App() {
                     <span className="q-progress">
                       Вопрос {activeQuestion.currentQuestionIndex + 1} из{" "}
                       {activeQuestion.totalQuestions}
-                      {/* НОВОЕ: Показываем ПИН-код прямо во время игры в шапке! */}
                       <span className="header-pin-badge">
                         {" "}
                         | PIN: <strong>{roomPin}</strong>
@@ -551,21 +596,41 @@ function App() {
                     </span>
                   </div>
 
+                  {activeQuestion.imageUrl && (
+                    <img
+                      src={activeQuestion.imageUrl}
+                      alt="Иллюстрация к вопросу"
+                      className="game-question-image"
+                    />
+                  )}
+
                   <h2 className="game-question-title">
                     {activeQuestion.questionText}
                   </h2>
 
+                  {activeQuestion.isMultipleChoice && (
+                    <p className="multi-choice-hint">
+                      ⚠️ Выберите несколько правильных вариантов и нажмите
+                      "Подтвердить"!
+                    </p>
+                  )}
+
                   {/* Белые горизонтальные варианты ответов в виде строчек */}
                   <div className="game-answers-list">
                     {activeQuestion.answers.map((ans, idx) => {
-                      const isSelected = selectedAnswerId === ans.id;
+                      const isSelected = selectedAnswerIds.includes(ans.id);
                       let extraClass = "";
 
                       const isHostViewAndCorrect =
                         activeQuestion.isHostView && ans.isCorrect;
 
                       if (questionResults) {
-                        if (ans.id === questionResults.correctAnswerId) {
+                        // [ОБНОВЛЕНО] Сверяем вхождение ответа в массив всех правильных IDs
+                        const isCurrentCorrect =
+                          questionResults.correctAnswerIds &&
+                          questionResults.correctAnswerIds.includes(ans.id);
+
+                        if (isCurrentCorrect) {
                           extraClass = "correct-reveal";
                         } else if (isSelected) {
                           extraClass = "wrong-reveal";
@@ -578,27 +643,47 @@ function App() {
                           : "fade-reveal";
                       } else if (isHostViewAndCorrect) {
                         extraClass = "host-correct-hint";
+                      } else if (isSelected) {
+                        extraClass = "selected-pending";
                       }
 
                       return (
                         <button
                           key={ans.id}
-                          onClick={() => handleSendAnswer(ans.id)}
+                          onClick={() => handleSelectAnswerId(ans.id)}
                           disabled={hasAnswered || !!questionResults || isHost}
                           className={`game-ans-btn-row ${extraClass}`}
                         >
                           <div className="ans-row-left">
-                            <span className="ans-row-letter">
-                              {String.fromCharCode(65 + idx)}
-                            </span>
+                            {activeQuestion.isMultipleChoice ? (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                readOnly
+                                className="ans-row-checkbox"
+                              />
+                            ) : (
+                              <span className="ans-row-letter">
+                                {String.fromCharCode(65 + idx)}
+                              </span>
+                            )}
                             <span className="ans-row-text">{ans.text}</span>
                           </div>
 
-                          {/* Зеленая галочка отображается только при вскрытии результатов */}
-                          {questionResults &&
-                            ans.id === questionResults.correctAnswerId && (
-                              <span className="correct-checkmark-icon">✓</span>
-                            )}
+                          {/* [ОБНОВЛЕНО] Зеленая галочка рендерится при вскрытии, если данный вариант верный */}
+                          {((questionResults &&
+                            questionResults.correctAnswerId === ans.id) ||
+                            (questionResults && isHostViewAndCorrect)) && (
+                            <span className="correct-checkmark-icon">✓</span>
+                          )}
+                          {!questionResults && isHostViewAndCorrect && (
+                            <span
+                              className="host-lock-icon"
+                              title="Правильный ответ"
+                            >
+                              🔒
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -606,8 +691,24 @@ function App() {
 
                   {/* ПОДВАЛ */}
                   <div className="game-screen-footer">
+                    {activeQuestion.isMultipleChoice &&
+                      !hasAnswered &&
+                      !questionResults &&
+                      !isHost && (
+                        <button
+                          onClick={handleSendMultipleAnswers}
+                          disabled={selectedAnswerIds.length === 0}
+                          className="submit-btn send-multi-btn"
+                        >
+                          Подтвердить ответ ✓
+                        </button>
+                      )}
+
                     {!questionResults ? (
-                      <div className="footer-status-row">
+                      <div
+                        className="footer-status-row"
+                        style={{ marginTop: "10px" }}
+                      >
                         <p className="answers-counter">
                           Ответов принято:{" "}
                           <strong>{answersCount.received}</strong> из{" "}
@@ -625,11 +726,7 @@ function App() {
                     ) : (
                       <div className="results-panel">
                         <p className="correct-ans-announcement">
-                          Правильный ответ:{" "}
-                          <strong>
-                            {questionResults.correctAnswerText ||
-                              "Нет правильного"}
-                          </strong>
+                          Правильные ответы вскрыты Ведущим!
                         </p>
                         {isHost ? (
                           <button
@@ -829,7 +926,8 @@ function App() {
                           <div className="quiz-info">
                             <h3>{quiz.title}</h3>
                             <p className="quiz-meta">
-                              ID: <strong>{quiz.id}</strong> | Вопросов:{" "}
+                              ID: <strong>{quiz.id}</strong> | Категория:{" "}
+                              <strong>{quiz.category}</strong> | Вопросов:{" "}
                               <strong>{quiz._count?.questions || 0}</strong>
                             </p>
                           </div>
@@ -862,6 +960,7 @@ function App() {
             </div>
           )}
 
+          {/* ЭКРАНЫ СОЗДАНИЯ И КОНСТРУКТОРА */}
           {currentView === "create-quiz" && (
             <div className="auth-card">
               <h2>Новый Квиз</h2>
@@ -877,6 +976,26 @@ function App() {
                     required
                   />
                 </div>
+
+                <div className="input-group select-group">
+                  <label>Категория квиза</label>
+                  <select
+                    value={newQuizCategory}
+                    onChange={(e) => setNewQuizCategory(e.target.value)}
+                  >
+                    <option value="Общее">Общее</option>
+                    <option value="Кино и Сериалы">Кино и Сериалы</option>
+                    <option value="Наука и Технологии">
+                      Наука и Технологии
+                    </option>
+                    <option value="Спорт">Спорт</option>
+                    <option value="Видеоигры">Видеоигры</option>
+                    <option value="История и География">
+                      История и География
+                    </option>
+                  </select>
+                </div>
+
                 <div className="input-group">
                   <label>Описание (необязательно)</label>
                   <textarea
@@ -945,6 +1064,7 @@ function App() {
                       ))}
                     </div>
                   </div>
+
                   <div className="add-question-panel">
                     <h3>
                       {editingQuestionId
@@ -961,7 +1081,20 @@ function App() {
                           required
                         />
                       </div>
+
                       <div className="input-group">
+                        <label>
+                          Ссылка на картинку (из интернета, необязательно)
+                        </label>
+                        <input
+                          type="text"
+                          value={questionImageUrl}
+                          onChange={(e) => setQuestionImageUrl(e.target.value)}
+                          placeholder="Например: https://image.com/pic.jpg"
+                        />
+                      </div>
+
+                      <div className="input-group select-group">
                         <label>Время (секунд)</label>
                         <select
                           value={timeLimit}
@@ -972,13 +1105,34 @@ function App() {
                           <option value={30}>30 секунд</option>
                         </select>
                       </div>
+
+                      <div className="input-group checkbox-choice-row">
+                        <input
+                          type="checkbox"
+                          id="multiChoice"
+                          checked={isMultipleChoice}
+                          onChange={(e) => {
+                            setIsMultipleChoice(e.target.checked);
+                            setAnswersList(
+                              answersList.map((ans) => ({
+                                ...ans,
+                                isCorrect: false,
+                              })),
+                            );
+                          }}
+                        />
+                        <label htmlFor="multiChoice">
+                          <strong>Разрешить выбор нескольких ответов</strong>
+                        </label>
+                      </div>
+
                       <div className="input-group">
                         <label>Варианты ответов</label>
                         <div className="answers-builder">
                           {answersList.map((ans, idx) => (
                             <div key={idx} className="answer-row-input">
                               <input
-                                type="radio"
+                                type="checkbox"
                                 checked={ans.isCorrect}
                                 onChange={() => handleSetCorrectAnswer(idx)}
                               />
