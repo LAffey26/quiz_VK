@@ -62,3 +62,23 @@ npm run dev
 ```
 
 Интерфейс откроется по адресу: http://localhost:5173.
+
+## Структура папок
+
+```bash
+quiz_VK/
+├── backend/              # Серверная часть (Node.js/Express)
+│   ├── prisma/           # Схема БД SQLite и файлы миграций
+│   ├── db.js             # Инициализация Prisma Client с SQLite адаптером
+│   ├── index.js          # Основной файл сервера, REST-роуты и логика Socket.IO
+│   └── package.json      # Зависимости бэкенда
+│
+├── frontend/             # Клиентская часть (React/Vite)
+│   ├── src/
+│   │   ├── App.jsx       # Главный компонент, игровые экраны и сокеты
+│   │   ├── App.css       # Полный набор стилей приложения
+│   │   └── main.jsx      # Точка входа React
+│   └── package.json      # Зависимости фронтенда
+│
+└── README.md             # Описание проекта
+```
