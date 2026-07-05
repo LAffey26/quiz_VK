@@ -18,8 +18,3 @@ yarn-error.log*
 dist/
 frontend/dist/
 
-.env
-backend/.env
-*.db
-*.db-journal
-backend/prisma/dev.db
