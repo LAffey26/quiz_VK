@@ -403,9 +403,8 @@ h2 {
   align-items: center;
 }
 
-/* КЛИКАБЕЛЬНЫЕ КАРТОЧКИ ИСТОРИИ ИГР */
 .history-card {
-  border-left: 5px solid #10b981 !important; /* Зеленый маркер */
+  border-left: 5px solid #10b981 !important;
   cursor: pointer;
   transition:
     transform 0.2s,
@@ -420,7 +419,7 @@ h2 {
 }
 
 .winner-highlight {
-  color: #059669; /* Зеленый победитель */
+  color: #059669;
 }
 
 .hq-info h3 {
@@ -437,7 +436,6 @@ h2 {
   color: #6b7280;
 }
 
-/* Топ победителей */
 .hub-right {
   flex: 1;
   min-width: 250px;
@@ -479,7 +477,7 @@ h2 {
 
 .winner-stats-badge .creator-count {
   background-color: #fef3c7;
-  color: #d97706; /* Золотой бейдж кубка побед */
+  color: #d97706;
   padding: 4px 8px;
   border-radius: 12px;
   font-weight: bold;

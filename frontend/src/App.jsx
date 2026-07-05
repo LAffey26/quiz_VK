@@ -31,7 +31,7 @@ function App() {
   const [gameHistory, setGameHistory] = useState([]);
   const [topWinners, setTopWinners] = useState([]);
   const [playSearchId, setPlaySearchId] = useState("");
-  const [popularQuizzes, setPopularQuizzes] = useState([]); // Популярные квизы
+  const [popularQuizzes, setPopularQuizzes] = useState([]);
 
   // Мои квизы
   const [quizzes, setQuizzes] = useState([]);
@@ -299,7 +299,7 @@ function App() {
         localStorage.setItem("user", JSON.stringify(data.user));
         setUser(data.user);
       } else {
-        setMessage("Успешно! Войдите.");
+        setMessage("Успешно! Теперь войдите.");
         setIsLogin(true);
       }
       setUsername("");
@@ -310,6 +310,7 @@ function App() {
       setLoading(false);
     }
   };
+
   const handleLogout = () => {
     localStorage.clear();
     setUser(null);
@@ -556,7 +557,7 @@ function App() {
           {currentView === "game-screen" && activeQuestion && (
             <div className="auth-card game-screen-card">
               <div className="game-screen-workspace">
-                {/* ЛЕВАЯ КОЛОНКА: ЛИДЕРБОРД УЧАСТНИКОВ (ЗВЕЗДОЧКИ) */}
+                {/* ЛЕВАЯ КОЛОНКА */}
                 <div className="game-live-leaderboard">
                   <h3>Рейтинг участников</h3>
                   <div className="live-players-list">
@@ -578,7 +579,7 @@ function App() {
                   </div>
                 </div>
 
-                {/* ПРАВАЯ КОЛОНКА: ТЕКСТ ВОПРОСА И СТРОЧКИ ОТВЕТОВ */}
+                {/* ПРАВАЯ КОЛОНКА */}
                 <div className="game-main-area">
                   <div className="game-screen-header">
                     <span className="q-progress">
@@ -615,7 +616,6 @@ function App() {
                     </p>
                   )}
 
-                  {/* Белые горизонтальные варианты ответов в виде строчек */}
                   <div className="game-answers-list">
                     {activeQuestion.answers.map((ans, idx) => {
                       const isSelected = selectedAnswerIds.includes(ans.id);
@@ -625,7 +625,6 @@ function App() {
                         activeQuestion.isHostView && ans.isCorrect;
 
                       if (questionResults) {
-                        // [ОБНОВЛЕНО] Сверяем вхождение ответа в массив всех правильных IDs
                         const isCurrentCorrect =
                           questionResults.correctAnswerIds &&
                           questionResults.correctAnswerIds.includes(ans.id);
@@ -670,26 +669,18 @@ function App() {
                             <span className="ans-row-text">{ans.text}</span>
                           </div>
 
-                          {/* [ОБНОВЛЕНО] Зеленая галочка рендерится при вскрытии, если данный вариант верный */}
-                          {((questionResults &&
-                            questionResults.correctAnswerId === ans.id) ||
-                            (questionResults && isHostViewAndCorrect)) && (
-                            <span className="correct-checkmark-icon">✓</span>
-                          )}
-                          {!questionResults && isHostViewAndCorrect && (
-                            <span
-                              className="host-lock-icon"
-                              title="Правильный ответ"
-                            >
-                              🔒
-                            </span>
-                          )}
+                          {questionResults &&
+                            questionResults.correctAnswerIds &&
+                            questionResults.correctAnswerIds.includes(
+                              ans.id,
+                            ) && (
+                              <span className="correct-checkmark-icon">✓</span>
+                            )}
                         </button>
                       );
                     })}
                   </div>
 
-                  {/* ПОДВАЛ */}
                   <div className="game-screen-footer">
                     {activeQuestion.isMultipleChoice &&
                       !hasAnswered &&
@@ -726,7 +717,7 @@ function App() {
                     ) : (
                       <div className="results-panel">
                         <p className="correct-ans-announcement">
-                          Правильные ответы вскрыты Ведущим!
+                          Верные ответы вскрыты Ведущим!
                         </p>
                         {isHost ? (
                           <button
@@ -807,7 +798,6 @@ function App() {
           {/* ДЕФОЛТНЫЙ ЭКРАН ХАБА */}
           {currentView === "hub" && !finalLeaderboard && (
             <div className="hub-container">
-              {/* Левая колонка: История сыгранных игр */}
               <div className="hub-left">
                 <div className="hub-join-card">
                   <h3>Войти в активную игру по PIN-коду</h3>
@@ -869,7 +859,6 @@ function App() {
                 )}
               </div>
 
-              {/* Правая колонка: ТОП Победителей */}
               <div className="hub-right">
                 <h2 className="section-title">Топ победителей</h2>
                 {topWinners.length === 0 ? (
@@ -960,7 +949,6 @@ function App() {
             </div>
           )}
 
-          {/* ЭКРАНЫ СОЗДАНИЯ И КОНСТРУКТОРА */}
           {currentView === "create-quiz" && (
             <div className="auth-card">
               <h2>Новый Квиз</h2>
@@ -1197,37 +1185,70 @@ function App() {
   return (
     <div className="auth-container">
       <div className="auth-card">
+        <div className="tab-buttons">
+          <button
+            className={isLogin ? "tab-btn active" : "tab-btn"}
+            onClick={() => {
+              setIsLogin(true);
+              setError("");
+              setMessage("");
+            }}
+          >
+            Войти
+          </button>
+          <button
+            className={!isLogin ? "tab-btn active" : "tab-btn"}
+            onClick={() => {
+              setIsLogin(false);
+              setError("");
+              setMessage("");
+            }}
+          >
+            Регистрация
+          </button>
+        </div>
+
         <h2>{isLogin ? "Вход в систему" : "Регистрация"}</h2>
+        <p className="subtitle">
+          {isLogin
+            ? "Введите свои данные для входа в панель"
+            : "Создайте аккаунт организатора"}
+        </p>
+
         <form onSubmit={handleSubmitAuth} className="auth-form">
           <div className="input-group">
-            <label>Имя</label>
+            <label>Имя пользователя</label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              placeholder="Введите ваше имя"
               required
             />
           </div>
+
           <div className="input-group">
             <label>Пароль</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="Минимум 6 символов"
               required
             />
           </div>
-          <button type="submit" className="submit-btn">
-            {isLogin ? "Войти" : "Зарегистрироваться"}
-          </button>
-          <button
-            type="button"
-            className="back-btn"
-            onClick={() => setIsLogin(!isLogin)}
-          >
-            {isLogin ? "Нет аккаунта? Регистрация" : "Есть аккаунт? Войти"}
+
+          <button type="submit" disabled={loading} className="submit-btn">
+            {loading
+              ? "Обработка..."
+              : isLogin
+                ? "Войти"
+                : "Зарегистрироваться"}
           </button>
         </form>
+
+        {message && <div className="alert success">{message}</div>}
+        {error && <div className="alert error">{error}</div>}
       </div>
     </div>
   );
